@@ -1,5 +1,9 @@
 {
   "port": 12525,
   "scriptsFolder": "dist",
-  "pushAllOnConnection": true
+  "pushAllOnConnection": true,
+  "definitionFile": {
+    "update": true,
+    "location": "./NetScriptDefinitions.d.ts"
+  }
 }
