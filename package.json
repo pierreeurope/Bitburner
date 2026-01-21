@@ -1,0 +1,13 @@
+{
+  "name": "bitburner-scripts",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch:ts": "tsc -w -p tsconfig.json",
+    "sync": "bitburner-filesync --config filesync.json --watch"
+  },
+  "devDependencies": {
+    "bitburner-filesync": "^1.0.0",
+    "typescript": "^5.4.0"
+  }
+}

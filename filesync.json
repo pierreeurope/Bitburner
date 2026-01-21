@@ -1,0 +1,5 @@
+{
+  "port": 12525,
+  "scriptsFolder": "dist",
+  "pushAllOnConnection": true
+}
