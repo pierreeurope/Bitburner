@@ -1,6 +1,6 @@
 const DEFAULTS = {
   target: "n00dles",
-  moneyThreshold: 0.9,
+  moneyThreshold: 0.5,
   secBuffer: 1.5,
   loopSleepMs: 200,
 };

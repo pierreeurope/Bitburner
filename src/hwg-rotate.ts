@@ -1,5 +1,5 @@
 const DEFAULTS = {
-  moneyThreshold: 0.9,
+  moneyThreshold: 0.5,
   secBuffer: 1.5,
   cycleSleepMs: 200,
 };

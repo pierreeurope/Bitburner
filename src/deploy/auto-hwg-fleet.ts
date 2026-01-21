@@ -14,8 +14,12 @@ export async function main(ns: NS) {
   const moneyThreshold = Number(ns.args[3] ?? DEFAULTS.moneyThreshold);
   const secBuffer = Number(ns.args[4] ?? DEFAULTS.secBuffer);
   const loopSleepMs = Number(ns.args[5] ?? DEFAULTS.loopSleepMs);
-  const maxDepth = Number(ns.args[6] ?? 3);
+  const maxDepth = Number(ns.args[6] ?? 5);
   const verbose = String(ns.args[7] ?? "true") !== "false";
+  const maxPurchaseRam = Number(ns.args[8] ?? 0);
+  const includeHome = String(ns.args[9] ?? "false") !== "false";
+  const buyBudgetRatio = Number(ns.args[10] ?? 0.2);
+  const mode = String(ns.args[11] ?? "xp"); // "money" | "xp"
 
   ns.disableLog("scan");
   ns.disableLog("sleep");
@@ -26,66 +30,87 @@ export async function main(ns: NS) {
   ns.disableLog("getServerMaxMoney");
   ns.disableLog("getHackingLevel");
   ns.disableLog("getServerNumPortsRequired");
-  ns.disableLog("getServerMoneyAvailable");
 
   while (true) {
     const purchased = ns.getPurchasedServers();
-    const targets = findHackableTargets(ns, purchased, maxDepth, verbose);
+    const workerHosts = includeHome ? ["home", ...purchased] : purchased;
+    const targets = findHackableTargets(ns, purchased, maxDepth, verbose, mode);
     const serverLimit = ns.getPurchasedServerLimit();
     const workerRam = ns.getScriptRam(workerScript);
 
     const desiredServers = Math.min(targets.length, serverLimit);
+    const minRam = smallestPowerOfTwoAtLeast(workerRam);
     let servers = purchased;
+    let usableServers = servers.filter(
+      (s) => ns.getServerMaxRam(s) >= minRam
+    );
 
     // Buy more servers if we have fewer servers than targets and can afford it.
-    while (servers.length < desiredServers) {
-      const ram = bestAffordableRam(ns, workerRam);
-      if (ram === 0) {
-        if (verbose) ns.print("Cannot afford any new server right now.");
+    while (usableServers.length < desiredServers && servers.length < serverLimit) {
+      const cost = ns.getPurchasedServerCost(minRam);
+      if (ns.getServerMoneyAvailable("home") < cost) {
+        if (verbose) ns.print("Cannot afford minimum server right now.");
         break;
       }
-      const cost = ns.getPurchasedServerCost(ram);
       const name = nextServerName(ns, prefix, servers);
+      const ramToBuy =
+        maxPurchaseRam && maxPurchaseRam >= minRam
+          ? Math.min(maxPurchaseRam, ns.getPurchasedServerMaxRam())
+          : bestAffordableRam(ns, minRam, buyBudgetRatio);
       if (verbose) {
         ns.print(
-          `Buying server ${name} with ${ns.formatRam(ram)} for ${ns.formatNumber(
-            cost
+          `Buying server ${name} with ${ns.formatRam(ramToBuy)} for ${ns.formatNumber(
+            ns.getPurchasedServerCost(ramToBuy)
           )}`
         );
       }
-      const purchased = ns.purchaseServer(name, ram);
+      const purchased = ns.purchaseServer(name, ramToBuy);
       if (!purchased) break;
       servers = ns.getPurchasedServers();
+      usableServers = servers.filter((s) => ns.getServerMaxRam(s) >= minRam);
     }
 
-    const assignments = assignTargetsToServers(servers, targets);
+    const assignments = assignTargetsToServers(
+      ns,
+      includeHome ? ["home", ...usableServers] : usableServers,
+      targets,
+      workerRam
+    );
     const started: string[] = [];
     const skipped: string[] = [];
     const insufficient: string[] = [];
 
-    for (const [server, target] of assignments) {
+    for (const [server, target, maxThreads] of assignments) {
       const maxRam = ns.getServerMaxRam(server);
-      if (maxRam < workerRam) {
+      if (maxThreads < 1) {
         insufficient.push(`${server}(${ns.formatRam(maxRam)})`);
         continue;
       }
 
-      if (ns.isRunning(workerScript, server, target)) {
-        skipped.push(`${server}->${target}`);
+      const procs = ns.ps(server).filter((p) => p.filename === workerScript);
+      const existing = procs.find((p) => String(p.args[0]) === target);
+      const needsRestart = !existing || existing.threads !== maxThreads;
+      if (!needsRestart) {
+        skipped.push(`${server}->${target}(${maxThreads}t)`);
         continue;
       }
 
-      await ns.scp(workerScript, server);
+      // Stop any existing worker on this server before reassigning.
+      for (const p of procs) ns.kill(p.pid);
+
+      if (server !== "home") {
+        await ns.scp(workerScript, server);
+      }
       const pid = ns.exec(
         workerScript,
         server,
-        1,
+        maxThreads,
         target,
         moneyThreshold,
         secBuffer,
         loopSleepMs
       );
-      if (pid !== 0) started.push(`${server}->${target}`);
+      if (pid !== 0) started.push(`${server}->${target}(${maxThreads}t)`);
     }
 
     if (verbose) {
@@ -95,13 +120,23 @@ export async function main(ns: NS) {
           `Targets=${targets.length}`,
           `Servers=${servers.length}/${serverLimit}`,
           `WorkerRAM=${ns.formatRam(workerRam)}`,
+          `MaxBuyRAM=${maxPurchaseRam ? ns.formatRam(maxPurchaseRam) : "min"}`,
+          `MinServerRAM=${ns.formatRam(minRam)}`,
+          `UseHome=${includeHome}`,
+          `BuyBudget=${Math.round(buyBudgetRatio * 100)}%`,
+          `Mode=${mode}`,
           `Started=${started.length}`,
           `Running=${skipped.length}`,
           `LowRAM=${insufficient.length}`,
         ].join(" | ")
       );
       if (targets.length) ns.print(`Targets: ${targets.join(", ")}`);
-      if (servers.length) ns.print(`Servers: ${servers.join(", ")}`);
+      if (workerHosts.length) ns.print(`Servers: ${workerHosts.join(", ")}`);
+      if (servers.length === serverLimit && usableServers.length < desiredServers) {
+        ns.print(
+          "At server limit with too-small servers. Delete/replace small servers to cover all targets."
+        );
+      }
       if (started.length) ns.print(`Started: ${started.join(", ")}`);
       if (skipped.length) ns.print(`Already running: ${skipped.join(", ")}`);
       if (insufficient.length) ns.print(`Too small: ${insufficient.join(", ")}`);
@@ -115,7 +150,8 @@ function findHackableTargets(
   ns: NS,
   purchased: string[],
   maxDepth: number,
-  verbose: boolean
+  verbose: boolean,
+  mode: string
 ): string[] {
   const purchasedSet = new Set(purchased);
   const visited = new Set<string>(["home"]);
@@ -151,16 +187,27 @@ function findHackableTargets(
     }
   }
 
-  // Highest value first.
-  targets.sort(
-    (a, b) => ns.getServerMaxMoney(b) - ns.getServerMaxMoney(a)
-  );
+  targets.sort((a, b) => scoreTarget(ns, b, mode) - scoreTarget(ns, a, mode));
   if (verbose) {
     ns.print(
       `Rooted=${rooted} | Targets(with money)=${targets.length} | Depth=${maxDepth}`
     );
   }
   return targets;
+}
+
+function scoreTarget(ns: NS, host: string, mode: string): number {
+  if (mode === "xp") {
+    const hackTime = ns.getHackTime(host);
+    const exp = typeof (ns as any).hackAnalyzeExp === "function"
+      ? (ns as any).hackAnalyzeExp(host, 1)
+      : 1;
+    return exp / Math.max(1, hackTime);
+  }
+  // default: money per second approximation
+  const maxMoney = ns.getServerMaxMoney(host);
+  const hackTime = ns.getHackTime(host);
+  return maxMoney / Math.max(1, hackTime);
 }
 
 function tryRoot(ns: NS, host: string, verbose: boolean) {
@@ -197,13 +244,23 @@ function tryRoot(ns: NS, host: string, verbose: boolean) {
 }
 
 function assignTargetsToServers(
+  ns: NS,
   servers: string[],
-  targets: string[]
-): Array<[string, string]> {
-  const pairs: Array<[string, string]> = [];
-  const count = Math.min(servers.length, targets.length);
-  for (let i = 0; i < count; i += 1) {
-    pairs.push([servers[i], targets[i]]);
+  targets: string[],
+  workerRam: number
+): Array<[string, string, number]> {
+  const pairs: Array<[string, string, number]> = [];
+  if (targets.length === 0) return pairs;
+
+  const sortedServers = [...servers].sort(
+    (a, b) => ns.getServerMaxRam(b) - ns.getServerMaxRam(a)
+  );
+
+  for (let i = 0; i < sortedServers.length; i += 1) {
+    const server = sortedServers[i];
+    const target = targets[i % targets.length];
+    const maxThreads = Math.floor(ns.getServerMaxRam(server) / workerRam);
+    pairs.push([server, target, maxThreads]);
   }
   return pairs;
 }
@@ -214,15 +271,22 @@ function smallestPowerOfTwoAtLeast(value: number): number {
   return Math.max(2, ram);
 }
 
-function bestAffordableRam(ns: NS, minRam: number): number {
+function bestAffordableRam(
+  ns: NS,
+  minRam: number,
+  budgetRatio: number
+): number {
   const maxPurchasable = ns.getPurchasedServerMaxRam();
   const min = smallestPowerOfTwoAtLeast(minRam);
+  const budget = ns.getServerMoneyAvailable("home") * budgetRatio;
   let ram = min;
-  let best = 0;
+  let best = min;
   while (ram <= maxPurchasable) {
     const cost = ns.getPurchasedServerCost(ram);
-    if (cost <= ns.getServerMoneyAvailable("home")) {
+    if (cost <= budget) {
       best = ram;
+    } else {
+      break;
     }
     ram *= 2;
   }
