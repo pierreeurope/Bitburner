@@ -8,7 +8,7 @@ type ContractInfo = {
 };
 
 export async function main(ns: NS) {
-  const includeDescription = ns.args.includes("--desc");
+  const includeDescription = true;
 
   const contracts = findContracts(ns, includeDescription);
   if (contracts.length === 0) {
@@ -44,7 +44,7 @@ function findContracts(ns: NS, includeDescription: boolean): ContractInfo[] {
     for (const file of files) {
       const type = ns.codingcontract.getContractType(file, host);
       const data = ns.codingcontract.getData(file, host);
-      const reward = ns.codingcontract.getReward(file, host);
+      const reward = getReward(ns, file, host);
       const entry: ContractInfo = {
         server: host,
         file,
@@ -60,6 +60,17 @@ function findContracts(ns: NS, includeDescription: boolean): ContractInfo[] {
   }
 
   return results;
+}
+
+function getReward(ns: NS, file: string, host: string): string {
+  const api = ns.codingcontract as any;
+  if (typeof api.getContractReward === "function") {
+    return api.getContractReward(file, host);
+  }
+  if (typeof api.getReward === "function") {
+    return api.getReward(file, host);
+  }
+  return "unknown";
 }
 
 function stringifyData(data: unknown): string {
