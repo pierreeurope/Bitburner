@@ -182,24 +182,7 @@ export async function main(ns: NS) {
     purchased = ns.getPurchasedServers();
     const stats = { weaken: 0, grow: 0, hack: 0, skipped: 0, killed: 0 };
 
-    // Phase 3: Check if all targets are at minimum security
-    const secBuffer = 2.0; // Small buffer to account for security increases
-    let allTargetsWeakened = true;
-    for (const target of targets) {
-      const secLevel = ns.getServerSecurityLevel(target);
-      const minSec = ns.getServerMinSecurityLevel(target);
-      if (secLevel > minSec + secBuffer) {
-        allTargetsWeakened = false;
-        break;
-      }
-    }
-
-    const phase = allTargetsWeakened ? "balanced" : "weaken";
-    if (verbose) {
-      ns.print(`\n[Phase] ${phase === "weaken" ? "Weakening all targets to minimum security" : "Balanced mode: 40% weaken, 40% grow, 20% hack"}`);
-    }
-
-    // Phase 4: Deploy to owned servers based on phase
+    // Phase 3: Deploy to owned servers - each server checks its own target's phase
     const sortedServers = [...purchased].sort(
       (a, b) => ns.getServerMaxRam(b) - ns.getServerMaxRam(a)
     );
@@ -225,6 +208,13 @@ export async function main(ns: NS) {
       );
       const freeRam = maxRam - otherProcsRam;
 
+      // Check target's security level to determine phase for THIS target
+      const secLevel = ns.getServerSecurityLevel(target);
+      const minSec = ns.getServerMinSecurityLevel(target);
+      const secBuffer = 2.0; // Small buffer to account for security increases
+      const targetNeedsWeaken = secLevel > minSec + secBuffer;
+      const phase = targetNeedsWeaken ? "weaken" : "balanced";
+
       // Check what we're currently running
       const currentWeaken = ourProcs.find(
         (p) => p.filename === weakenScript && String(p.args[0]) === target
@@ -236,7 +226,7 @@ export async function main(ns: NS) {
         (p) => p.filename === hackScript && String(p.args[0]) === target
       );
 
-      // Calculate threads based on phase
+      // Calculate threads based on THIS target's phase
       let weakenThreads = 0;
       let growThreads = 0;
       let hackThreads = 0;
@@ -379,17 +369,18 @@ export async function main(ns: NS) {
     }
 
     if (verbose) {
-      const currentPhase = allTargetsWeakened ? "balanced" : "weaken";
-      ns.print(`\n[Summary] Phase: ${currentPhase} | Weaken: ${stats.weaken}t | Grow: ${stats.grow}t | Hack: ${stats.hack}t`);
+      // Count targets in each phase
+      const secBuffer = 2.0;
+      const targetsNeedingWeaken = targets.filter((t) => {
+        const sec = ns.getServerSecurityLevel(t);
+        const min = ns.getServerMinSecurityLevel(t);
+        return sec > min + secBuffer;
+      }).length;
+      const targetsInBalanced = targets.length - targetsNeedingWeaken;
+      
+      ns.print(`\n[Summary] Weaken: ${stats.weaken}t | Grow: ${stats.grow}t | Hack: ${stats.hack}t`);
       ns.print(`  Skipped: ${stats.skipped} | Killed: ${stats.killed}`);
-      if (!allTargetsWeakened) {
-        const targetsNeedingWeaken = targets.filter((t) => {
-          const sec = ns.getServerSecurityLevel(t);
-          const min = ns.getServerMinSecurityLevel(t);
-          return sec > min + secBuffer;
-        }).length;
-        ns.print(`  Targets needing weaken: ${targetsNeedingWeaken}/${targets.length}`);
-      }
+      ns.print(`  Targets: ${targetsInBalanced} balanced, ${targetsNeedingWeaken} weakening`);
       ns.print(`Next refresh in ${Math.round(refreshMs / 1000)}s\n`);
     }
 
