@@ -16,17 +16,19 @@ export async function main(ns: NS) {
   ns.disableLog("getServerMoneyAvailable");
 
   while (true) {
-    const server = ns.getServer(target);
-    const minSec = server.minDifficulty ?? ns.getServerMinSecurityLevel(target);
-    const maxMoney = server.moneyMax ?? ns.getServerMaxMoney(target);
-    const curSec = server.hackDifficulty ?? ns.getServerSecurityLevel(target);
-    const curMoney = server.moneyAvailable ?? ns.getServerMoneyAvailable(target);
+    const minSec = ns.getServerMinSecurityLevel(target);
+    const maxMoney = ns.getServerMaxMoney(target);
+    const curSec = ns.getServerSecurityLevel(target);
+    const curMoney = ns.getServerMoneyAvailable(target);
 
+    // Always weaken first until we reach minimum security
     if (curSec > minSec + secBuffer) {
       await ns.weaken(target);
     } else if (curMoney < maxMoney * moneyThreshold) {
+      // Grow if money is below threshold
       await ns.grow(target);
     } else {
+      // Hack when security is low and money is high
       await ns.hack(target);
     }
 

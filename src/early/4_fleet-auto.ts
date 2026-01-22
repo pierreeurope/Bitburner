@@ -3,7 +3,7 @@ export async function main(ns: NS) {
   const worker = "smart-hwg.js";
   const prefix = "server";
   const refreshMs = 10000;
-  const moneyThreshold = 0.9;
+  const moneyThreshold = 0.5;
   const secBuffer = 1.5;
   const loopSleepMs = 200;
   const maxDepth = 5;
